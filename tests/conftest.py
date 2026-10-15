@@ -66,3 +66,35 @@ def new_item():
         "price": 1.5,
         "stock": 40,
     }
+
+
+class FlaskSession:
+    """A requests.Session look-alike that sends CLI requests to the Flask test client."""
+
+    def __init__(self, test_client):
+        self.test_client = test_client
+
+    def request(self, method, url, timeout=None, params=None, json=None):
+        path = url.split("://", 1)[-1].split("/", 1)[-1]
+        response = self.test_client.open(f"/{path}", method=method, query_string=params, json=json)
+        return FlaskResponse(response)
+
+
+class FlaskResponse:
+    def __init__(self, response):
+        self.status_code = response.status_code
+        self.ok = response.status_code < 400
+        self._response = response
+
+    def json(self):
+        body = self._response.get_json(silent=True)
+        if body is None:
+            raise ValueError("no JSON")
+        return body
+
+
+@pytest.fixture
+def api(client):
+    from inventory_cli.api_client import InventoryApiClient
+
+    return InventoryApiClient(base_url="http://test/api", session=FlaskSession(client))
