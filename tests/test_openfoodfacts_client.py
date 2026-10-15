@@ -31,7 +31,9 @@ def make_client(response=None, error=None):
     else:
         session.get.side_effect = response if isinstance(response, list) else None
         session.get.return_value = response
-    client = OpenFoodFactsClient(base_url="https://off.test/", session=session, retry_delay=0)
+    client = OpenFoodFactsClient(
+        base_url="https://off.test/", search_url="https://search.off.test", session=session, retry_delay=0
+    )
     return client, session
 
 
@@ -113,20 +115,20 @@ class TestGetProduct:
 
 
 class TestSearch:
-    def test_calls_search_endpoint(self):
-        client, session = make_client(make_response(payload={"products": []}))
+    def test_uses_search_a_licious(self):
+        client, session = make_client(make_response(payload={"hits": []}))
         client.search("almond milk", limit=3)
         url = session.get.call_args.args[0]
         params = session.get.call_args.kwargs["params"]
-        assert url == "https://off.test/cgi/search.pl"
-        assert params["search_terms"] == "almond milk"
-        assert params["json"] == 1
+        assert url == "https://search.off.test/search"
+        assert params["q"] == "almond milk"
         assert params["page_size"] == 3
+        assert session.get.call_count == 1
 
-    def test_returns_normalized_results_and_skips_entries_without_code(self):
+    def test_normalizes_hits_joins_brand_lists_and_skips_entries_without_code(self):
         payload = {
-            "products": [
-                {"code": "4056489346357", "product_name": "Almond drink", "brands": "Vemondo"},
+            "hits": [
+                {"code": "4157006837", "product_name": "Almond milk", "brands": ["Blue Diamond", " "]},
                 {"product_name": "No barcode"},
                 "garbage",
             ]
@@ -134,19 +136,37 @@ class TestSearch:
         client, _ = make_client(make_response(payload=payload))
         assert client.search("almond") == [
             {
-                "barcode": "4056489346357",
-                "product": {"product_name": "Almond drink", "brands": "Vemondo"},
+                "barcode": "4157006837",
+                "product": {"product_name": "Almond milk", "brands": "Blue Diamond"},
             }
         ]
 
+    def test_falls_back_to_legacy_search_when_search_a_licious_fails(self):
+        legacy = {"products": [{"code": "4056489346357", "product_name": "Almond drink"}]}
+        responses = [make_response(status=503)] * 3 + [make_response(payload=legacy)]
+        client, session = make_client(responses)
+        assert client.search("almond", limit=4)[0]["barcode"] == "4056489346357"
+        url = session.get.call_args.args[0]
+        params = session.get.call_args.kwargs["params"]
+        assert url == "https://off.test/cgi/search.pl"
+        assert params["search_terms"] == "almond"
+        assert params["json"] == 1
+        assert params["page_size"] == 4
+
+    def test_falls_back_when_search_a_licious_shape_is_unexpected(self):
+        legacy = {"products": [{"code": "12345678", "product_name": "Water"}]}
+        client, session = make_client([make_response(payload={"oops": 1}), make_response(payload=legacy)])
+        assert client.search("water")[0]["product"]["product_name"] == "Water"
+        assert session.get.call_count == 2
+
     def test_limit_is_clamped(self):
-        client, session = make_client(make_response(payload={"products": []}))
+        client, session = make_client(make_response(payload={"hits": []}))
         client.search("x", limit=500)
         assert session.get.call_args.kwargs["params"]["page_size"] == 20
         client.search("x", limit=0)
         assert session.get.call_args.kwargs["params"]["page_size"] == 1
 
-    def test_unexpected_shape_raises(self):
+    def test_raises_when_both_endpoints_fail(self):
         client, _ = make_client(make_response(payload={"oops": True}))
         with pytest.raises(ExternalAPIError, match="unexpected"):
             client.search("x")
