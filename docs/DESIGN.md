@@ -89,20 +89,23 @@ matching status code.
 ## 4. Architecture
 
 ```
-cli.py  ──HTTP──▶  Flask app (app/routes.py)
+cli.py  ──HTTP──▶  Flask app (app/routes.py, app/external_routes.py)
                      │  validates input (app/validation.py)
                      ├─▶ InventoryRepository (app/repository.py) ◀─ seed (app/data.py)
                      └─▶ OpenFoodFactsClient (app/openfoodfacts.py) ──HTTP──▶ world.openfoodfacts.org
+                                                                              search.openfoodfacts.org
 ```
 
 - `create_app()` builds a fresh app with its own repository and OpenFoodFacts
   client, so each test gets clean data and a fake client can be injected.
 - The repository never mutates records in place; reads return copies and an
   update swaps in a new dict.
-- The OpenFoodFacts client uses the v2 product endpoint for barcodes and the
-  documented `cgi/search.pl` endpoint for name search, requests only the fields
-  we store, sends a descriptive `User-Agent` as the API asks, and turns network
-  and HTTP failures into a single `ExternalAPIError`.
+- The OpenFoodFacts client uses the v2 product endpoint for barcodes and
+  Search-a-licious (`search.openfoodfacts.org/search`) for name search, falling
+  back to the legacy `cgi/search.pl` endpoint if that fails. It requests only
+  the fields we store, sends a descriptive `User-Agent` as the API asks, retries
+  503s briefly (the service is rate-limited), and turns network and HTTP
+  failures into a single `ExternalAPIError`, which the routes return as `502`.
 
 ## 5. Testing
 
